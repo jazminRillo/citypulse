@@ -269,3 +269,194 @@ Promises and `await` use microtask scheduling, while timers and `setImmediate()`
 4. Why does `setImmediate()` improve responsiveness without providing parallel execution?
 5. When would worker threads be a better solution than batching?
 6. How can a long-running synchronous calculation affect a React application's UI?
+
+## 1.3: Resilient HTTP Clients
+
+Build a reusable HTTP client for external APIs, handle failures gracefully, and learn how to manage retries, timeouts, concurrent requests, and partial failures.
+
+### 1. Building a Generic HTTP Client
+
+I created `src/lib/http.ts` and implemented a generic `fetchJson<T>(url, options)` function using Node.js's native `fetch()` API.
+
+The client supports:
+
+- Configurable request timeouts.
+- A custom `ExternalApiError` class.
+- A configurable number of retries.
+- Exponential backoff between retries.
+- Different error handling strategies depending on the failure type.
+
+#### Key takeaway
+
+A reusable HTTP client centralizes cross-cutting concerns such as timeouts, error handling, and retries, making the rest of the application simpler and more consistent.
+
+### 2. Understanding HTTP and Network Errors
+
+Not all request failures mean the same thing.
+
+- **2xx responses:** the HTTP request succeeded.
+- **4xx responses:** the request was rejected because of a client-side issue, such as an invalid URL path or missing resource.
+- **5xx responses:** the server encountered an error while processing the request.
+- **Network errors:** the client could not successfully complete the request because of a connectivity, DNS, or similar transport problem.
+- **Timeouts:** the request took longer than the configured time limit.
+
+The native `fetch()` API does not automatically throw an exception for HTTP error responses such as 404 or 500. I need to check `response.ok` and handle non-success status codes explicitly.
+
+### 3. Custom Errors with `ExternalApiError`
+
+I created an `ExternalApiError` class to represent failures when communicating with external services.
+
+The error includes information such as:
+
+- The URL that failed.
+- The type of error.
+- The HTTP status code, when available.
+- Whether the failure is eligible for retries.
+
+A custom error provides more useful information than a generic error message. It allows calling code to distinguish between an HTTP error, a network failure, a timeout, and invalid JSON.
+
+It also makes logging and debugging easier because the error contains structured information about what went wrong.
+
+### 4. Timeouts and Cancellation
+
+A timeout prevents a request from waiting indefinitely.
+
+I used `AbortController` to cancel the underlying fetch operation when the configured timeout expires.
+
+The timeout is important because external services may become slow or stop responding. Without a timeout, requests can consume resources for longer than the application can reasonably tolerate.
+
+I also learned that cancellation needs to be handled carefully: a timeout should be distinguishable from other network errors, and the timeout timer should be cleared when the request finishes.
+
+### 5. Retry Policies and Exponential Backoff
+
+I added configurable retries for transient network failures and HTTP 5xx responses.
+
+The client does not retry HTTP 4xx responses.
+
+Between retry attempts, it waits for progressively longer periods using exponential backoff.
+
+For example, with an initial backoff of 300 ms, the delays are:
+
+- First retry: 300 ms.
+- Second retry: 600 ms.
+- Third retry: 1,200 ms.
+
+The original request counts as the first attempt. Three retries therefore allow up to four total attempts.
+
+Exponential backoff reduces the frequency of repeated requests while a service is failing.
+
+#### Important considerations
+
+- Retrying a request is not always safe for operations that modify data. Retrying a non-idempotent operation can cause duplicate effects.
+- Retries should be bounded to prevent endless loops.
+- Production systems may benefit from randomized jitter to reduce synchronized retry traffic.
+- Timeouts, retries, and backoff all contribute to the total time a request may take.
+
+### 6. Querying Real Valencia Open Data
+
+Use the Valencia City Council's Open Data portal to retrieve records from three datasets concurrently.
+
+External APIs expose different resources through predictable URL patterns. Once I identify the dataset identifier and endpoint structure, I can use the same HTTP client to query multiple datasets.
+
+I also learned that successful HTTP responses do not automatically guarantee that the returned data matches the application's expectations. Response schemas may differ between datasets and should be validated when the data enters the application.
+
+I used `Promise.allSettled()` to execute multiple dataset requests and inspect each result independently.
+
+Each request produces either:
+
+- A `fulfilled` result containing the successful response.
+- A `rejected` result containing the failure reason.
+
+I counted successful and failed requests and printed a summary.
+
+#### What I learned
+
+`Promise.allSettled()` waits for every input promise to settle, regardless of whether individual promises succeed or fail.
+
+This is useful when querying independent external services because one failure does not prevent me from collecting the results of the other requests.
+
+By contrast, `Promise.all()` rejects as soon as one input promise rejects, although the other operations may still be running.
+
+### 7. Limiting Concurrency Without Libraries
+
+I added a small concurrency limiter that allows no more than two requests to be active simultaneously.
+
+The limiter maintains a queue of pending tasks and starts a new task whenever an active task finishes.
+
+I combined the limiter with `Promise.allSettled()` so that I could limit concurrency while still collecting the outcome of every request.
+
+Launching all requests at once can overload a remote service, consume local resources, or trigger rate limits.
+
+A concurrency limit controls how many operations may be active simultaneously. It does not necessarily limit the total number of requests or requests per second.
+
+The distinction is important:
+
+- **Concurrency limit:** how many requests can be in progress at once.
+- **Rate limit:** how many requests can be started during a period of time.
+
+### 8. Deliberately Testing Failures
+
+#### Objective
+
+Verify that the HTTP client behaves correctly under different failure conditions.
+
+#### Tests
+
+I tested the following scenarios:
+
+- A nonexistent dataset URL that returns a 404.
+- An invalid domain that causes a network error.
+- A request with a timeout of 50 ms.
+- A successful request to a valid dataset.
+
+#### Expected behavior
+
+| Scenario | Expected behavior |
+|---|---|
+| HTTP 2xx | Return the parsed JSON |
+| HTTP 404 | Throw `ExternalApiError` without retrying |
+| HTTP 5xx | Retry up to the configured limit |
+| Network error | Retry up to the configured limit |
+| Timeout | Abort the request and retry within the configured limit |
+| Invalid JSON | Throw an error without retrying |
+
+#### What I learned
+
+Failure injection is an effective way to test error handling instead of assuming it works.
+
+A successful request proves only the happy path. Deliberately causing failures verifies that the application behaves predictably when external dependencies are unreliable.
+
+### Interview Preparation
+
+#### Question: What is the difference between `Promise.all()`, `Promise.allSettled()`, `Promise.race()`, and `Promise.any()`?
+
+- **`Promise.all()`** fulfills when every input fulfills and rejects when an input rejects.
+- **`Promise.allSettled()`** waits until every input has fulfilled or rejected and returns the outcome of each.
+- **`Promise.race()`** settles with the outcome of the first input promise to settle, whether fulfilled or rejected.
+- **`Promise.any()`** fulfills with the first successful input and rejects with an `AggregateError` if every input rejects.
+
+These methods do not automatically cancel the other operations when one promise settles.
+
+#### Question: Why use exponential backoff?
+
+Exponential backoff increases the waiting period between retry attempts. It reduces repeated requests against an unhealthy service and gives the service time to recover.
+
+#### Question: Why should a 404 not be retried?
+
+A 404 generally indicates that the requested resource does not exist at the specified URL. Repeating the same request without changing the URL or resource is unlikely to fix the problem.
+
+#### Question: Why use `Promise.allSettled()` when integrating multiple external APIs?
+
+Independent external services can fail separately. `Promise.allSettled()` allows me to collect successful responses and individual failures without losing the results of requests that completed successfully.
+
+#### Question: What is the difference between concurrency limiting and rate limiting?
+
+Concurrency limiting restricts the number of operations running simultaneously. Rate limiting restricts how frequently operations can be started over a given period.
+
+## Final Reflection
+
+This exercise taught me that integrating external APIs requires more than sending HTTP requests and parsing JSON.
+
+I learned to classify failures, enforce timeouts, retry transient errors, apply exponential backoff, collect partial results, and limit concurrent operations.
+
+**The main lesson:** External services are unreliable by nature, so a robust backend needs explicit policies for timeouts, retries, error classification, and partial failures.
