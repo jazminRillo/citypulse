@@ -460,3 +460,13 @@ This exercise taught me that integrating external APIs requires more than sendin
 I learned to classify failures, enforce timeouts, retry transient errors, apply exponential backoff, collect partial results, and limit concurrent operations.
 
 **The main lesson:** External services are unreliable by nature, so a robust backend needs explicit policies for timeouts, retries, error classification, and partial failures.
+
+### 1.4 Request Middleware, Validation & TypeScript Types
+
+- Created a request ID middleware using `crypto.randomUUID()` and added the ID to `res.locals` and the `X-Request-Id` response header.
+- Implemented a request logger to record the HTTP method, URL, status code, request ID, and response duration using `performance.now()` and the `finish` event.
+- Created a reusable Zod validation middleware using `safeParse()` to validate query parameters and return a `400` response when validation fails.
+- Learned the difference between TypeScript types and runtime values: types describe the expected data structure, while assignments store actual values.
+- Used `z.output<typeof querySchema>` and `Response<unknown, EchoLocals>` to type validated query data in the route handler.
+
+**Key takeaway:** Middleware order matters, and TypeScript types help us catch mistakes but do not validate or store runtime data.
