@@ -470,3 +470,19 @@ I learned to classify failures, enforce timeouts, retry transient errors, apply 
 - Used `z.output<typeof querySchema>` and `Response<unknown, EchoLocals>` to type validated query data in the route handler.
 
 **Key takeaway:** Middleware order matters, and TypeScript types help us catch mistakes but do not validate or store runtime data.
+
+### 1.5 Centralized Error Handling
+
+#### What I learned
+- Implemented a centralized `errorHandler` to return consistent error responses with HTTP status codes, error codes, messages and request IDs.
+- Created custom error classes (`AppError`, `ValidationError`, `NotFoundError` and `ExternalApiError`).
+- Used `next(error)` to forward validation and route errors to the centralized handler.
+- Learned that Express 5 automatically forwards errors from rejected promises in async route handlers.
+- Added process handlers for `uncaughtException` and `unhandledRejection`.
+- Implemented a basic graceful shutdown using `server.close()` and an `isShuttingDown` flag to prevent multiple shutdown attempts.
+
+#### Key takeaway
+HTTP request errors should be handled by Express without stopping the server. Fatal process errors are different: they should be logged and trigger a controlled shutdown because the process may be in an inconsistent state.
+
+#### Testing
+Tested invalid query parameters, unknown routes, unexpected HTTP errors and a simulated uncaught exception.
